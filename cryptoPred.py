@@ -1,102 +1,99 @@
-import numpy
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Oct 12 04:17:04 2022
+
+@author: ShiornJijoe
+"""
+
+import numpy as np
 import matplotlib.pyplot as plt
-from pandas import read_csv
-import math
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM,GRU
-from sklearn.preprocessing import MinMaxScaler,RobustScaler,StandardScaler
-from sklearn.metrics import mean_squared_error
-from pandas import Series
+import pandas as pd
+import pandas_datareader as web
+import datetime as dt
 
-data=pd.read_csv('Bitcoin2021Daily.csv')
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.layers import Dense, Dropout, LSTM
+from tensorflow.keras.models import Sequential
 
+crypto_currency = 'BTC'
+against_currency = 'USD'
 
-data=data.set_index(pd.DatetimeIndex(data['Date']))['Close']
-def difference(dataset, interval=1):
-	diff = list()
-	for i in range(interval, len(dataset)):
-		value = dataset[i] - dataset[i - interval]
-		diff.append(value)
-	return Series(diff)
+start=dt.datetime(2016,1,1)
+end=dt.datetime(2022,10,10)
 
-look_back=3
+data=web.DataReader(f'{crypto_currency}-{against_currency}','yahoo',start,end)
 
+#preparing data
+scaler = MinMaxScaler(feature_range=(0,1))
+scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1,1))
+
+prediction_days = 60
+future_day = 5
+x_train, y_train =[], []
+
+for x in range(prediction_days, len(scaled_data)-future_day):
+    x_train.append(scaled_data[x-prediction_days:x,0])
+    y_train.append(scaled_data[x+future_day,0])
     
+x_train, y_train =np.array(x_train),np.array(y_train)
+x_train = np.reshape(x_train,(x_train.shape[0],x_train.shape[1],1))
 
-def create_dataset(dataset, look_back=1):
-    dataX, dataY = [], []
-    for i in range(len(dataset)-look_back-1):
-        #takes 
-        a = dataset[i:(i+look_back), 0]
-        dataX.append(a)
-        dataY.append(dataset[i+look_back, 0])
-    return numpy.array(dataX), numpy.array(dataY)
+#creating the neural network
 
-# fix random seed for reproducibility
-numpy.random.seed(0)
+model= Sequential()
+model.add(LSTM(units=50,return_sequences=True,input_shape=(x_train.shape[1],1)))
+model.add(Dropout(0.2))
+model.add(LSTM(units=50,return_sequences=True))
+model.add(Dropout(0.2))
+model.add(LSTM(units=50))
+model.add(Dropout(0.2))
+model.add(Dense(units=1))
 
-# load the dataset
-dataframe = data
-dataset = dataframe.values
-dataset = dataset.astype('float64').reshape(-1, 1)
+model.compile(optimizer='adam',loss='mean_squared_error')
+model.fit(x_train, y_train, epochs=6, batch_size=32)
 
-# normalize the dataset
-scaler = MinMaxScaler()
-#scaler=RobustScaler()
-#scaler=StandardScaler()
-dataset = scaler.fit_transform(dataset)
+#testing
 
-# split into train and test sets
-train_size = int(len(dataset) * 0.67)
-test_size = len(dataset) - train_size
-train, test = dataset[0:train_size,:], dataset[train_size:len(dataset),:]
+test_start = dt.datetime(2020,1,1)
+test_end = dt.datetime.now()
 
-# reshape into X=t and Y=t+1
-#look_back = 10
-trainX, trainY = create_dataset(train, look_back)
-testX, testY = create_dataset(test, look_back)
+test_data=web.DataReader(f'{crypto_currency}-{against_currency}','yahoo',start,end)
+actual_prices = test_data['Close'].values
 
-# reshape input to be [samples, time steps, features]
-trainX = numpy.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1]))
-testX = numpy.reshape(testX, (testX.shape[0], 1, testX.shape[1]))
-# create and fit the LSTM network
-from keras.layers import Activation, Dense,Dropout
-model = Sequential()
+total_dataset = pd.concat((data['Close'],test_data['Close']),axis=0)
 
-model.add(LSTM(256, return_sequences=True,input_shape=(1, look_back)))
-#model.add(LSTM(256, return_sequences=True,input_shape=(1, look_back)))
-model.add(LSTM(256))
-#model.add(LSTM(100, input_shape=(1, look_back)))
+model_inputs = total_dataset[len(total_dataset)-len(test_data)-prediction_days:].values
+model_inputs=model_inputs.reshape(-1,1)
+model_inputs = scaler.fit_transform(model_inputs)
 
-model.add(Dense(1))
-import keras
-from keras import optimizers
+x_test=[]
 
-#keras.optimizers.Adam(lr=0.01, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False, clipnorm=1)
+for x in range (prediction_days,len(model_inputs)):
+    x_test.append(model_inputs[x-prediction_days:x,0])
 
-model.compile(loss='mean_squared_error', optimizer='adam')
-model.fit(trainX, trainY, epochs=50, verbose=1,shuffle=False,batch_size=50)
-# make predictions
-trainPredict = model.predict(trainX)
-testPredict = model.predict(testX)
-# invert predictions
-trainPredict = scaler.inverse_transform(trainPredict)
-trainY = scaler.inverse_transform([trainY])
-testPredict = scaler.inverse_transform(testPredict)
-testY = scaler.inverse_transform([testY])
-# calculate root mean squared error
-trainScore = math.sqrt(mean_squared_error(trainY[0], trainPredict[:,0]))
-print('Train Score: %.2f RMSE' % (trainScore))
-testScore = math.sqrt(mean_squared_error(testY[0], testPredict[:,0]))
-print('Test Score: %.2f RMSE' % (testScore))
-predictions = numpy.empty_like(dataset)
-predictions[:, :] = numpy.nan
-predictions[look_back:len(trainPredict)+look_back, :] = trainPredict
-predictions[len(trainPredict)+(look_back*2)+1:len(dataset)-1, :] = testPredict
-#data=pd.DataFrame(numpy.concatenate((trainPredict[0:len(trainPredict)-look_back-1],testPredict[0:len(testPredict)-look_back-1])),columns=["predicted"])
-#print('one',data.count())
-#print('two',dataframe.count())
-predictionsDF=pd.DataFrame(predictions,columns=["predicted"],index=dataframe.index)
-ans=pd.concat([dataframe,predictionsDF],axis=1)
-print( ans,[look_back,trainScore,testScore])
+x_test=np.array(x_test)
+x_test=np.reshape(x_test,(x_test.shape[0],x_test.shape[1],1))
+
+prediction_prices = model.predict(x_test)
+
+prediction_prices=scaler.inverse_transform(prediction_prices)
+  
+
+plt.plot(actual_prices,color='black',label='Actual Prices')
+plt.plot(prediction_prices,color='green', label='Predicted Prices')
+plt.title(f'{crypto_currency} price prediction')
+
+plt.xlabel('Time')
+plt.ylabel('Price')
+plt.legend(loc='upper left')
+plt.show()
+
+# Predict next day
+
+real_data = [model_inputs[len(model_inputs)+1-prediction_days:len(model_inputs)+1,0]]
+real_data = np.array(real_data)
+real_data = np.reshape(real_data, (real_data.shape[0],real_data.shape[1],1))
+
+prediction=model.predict(real_data)
+prediction=scaler.inverse_transform(prediction)
+print()
